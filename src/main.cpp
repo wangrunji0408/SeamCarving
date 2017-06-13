@@ -91,26 +91,44 @@ void printSeam (cv::Mat src, std::vector<int> const& cols)
         src.at<cv::Vec3b>(i, cols[i]) = cv::Vec3b(0, 0, 255);
 }
 
+cv::Mat seamCarvingCol (cv::Mat const& image)
+{
+    auto imat = makeIMat(image);
+    auto cols = findMinColSeam(imat);
+    return cutCol(image, cols);
+}
+
+inline cv::Mat transpose (cv::Mat const& src)
+{
+    cv::Mat dst;
+    cv::transpose(src, dst);
+    return dst;
+}
+
 cv::Mat seamCarving (cv::Mat const& src, cv::MatSize size)
 {
     auto image = src.clone();
     int colTimes = std::max(0, src.size[1] - size[1]);
     int rowTimes = std::max(0, src.size[0] - size[0]);
-    for(int i=0; i<colTimes; ++i)
+    for(; colTimes > 0 && rowTimes > 0; colTimes--, rowTimes--)
     {
-        auto imat = makeIMat(image);
-        auto cols = findMinColSeam(imat);
-        image = cutCol(image, cols);
+        image = seamCarvingCol(image);
+        image = transpose(image);
+        image = seamCarvingCol(image);
+        image = transpose(image);
     }
-    cv::Mat image2;
-    cv::transpose(image, image2); image = image2;
-    for(int i=0; i<rowTimes; ++i)
+    if(colTimes > 0)
     {
-        auto imat = makeIMat(image);
-        auto cols = findMinColSeam(imat);
-        image = cutCol(image, cols);
+        for(; colTimes > 0; colTimes--)
+            image = seamCarvingCol(image);
     }
-    cv::transpose(image, image2); image = image2;
+    else
+    {
+        image = transpose(image);
+        for(; rowTimes > 0; rowTimes--)
+            image = seamCarvingCol(image);
+        image = transpose(image);
+    }
     return image;
 }
 
