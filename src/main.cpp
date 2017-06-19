@@ -208,8 +208,12 @@ cv::Mat handleSeams (cv::Mat const& src, Seams const& seams, bool add = false)
                 if(col0 != 0)
                     dst.at<T>(i, col0 + cnt-1) = mean(src.at<T>(i, col0), src.at<T>(i, col0 - 1));
             }
-            else
-                matcpy(src, dst, i, col0, col0 - cnt, col1 - col0);
+            else {
+                if(cnt == 0)
+                    matcpy(src, dst, i, 0, col0, col1);
+                else
+                    matcpy(src, dst, i, col0 + 1, col0 - cnt+1, col1 - col0 - 1);
+            }
         }
         lastSeam = nowSeam;
     }
@@ -251,7 +255,7 @@ void printSeams (cv::Mat src, Seams const& seams, cv::Mat const& mask, bool tran
     if(trans)
         src = transpose(src);
     cv::imshow("image", src);
-    cv::waitKey();
+    cv::waitKey(1);
 }
 
 void printSeam (cv::Mat src, vector<int> const& cols, cv::Mat const& mask, bool trans = false)
@@ -321,12 +325,12 @@ cv::Mat seamCarvingEnlarge (cv::Mat const& src, cv::MatSize size)
     auto image = src.clone();
     int colTimes = std::max(0, size[1] - src.size[1]);
     int rowTimes = std::max(0, size[0] - src.size[0]);
-    int seamSize = colTimes / 8 + 1;
-    for(; colTimes > 0; colTimes -= seamSize)
+    int seamSize = colTimes / 2;
+    while(size[1] - image.size[1] > 0)
         image = seamCarvingEnlargeCol(image, (size_t) std::min(seamSize, colTimes), false);
-    seamSize = rowTimes / 8 + 1;
+    seamSize = rowTimes / 2;
     image = transpose(image);
-    for(; rowTimes > 0; rowTimes -= seamSize)
+    while(size[0] - image.size[0] > 0)
         image = seamCarvingEnlargeCol(image, (size_t) std::min(seamSize, rowTimes), true);
     image = transpose(image);
     return image;
@@ -357,7 +361,7 @@ cv::Mat readMask (const char* path)
 
 int main (int argc, char** argv) {
 
-    if(argc < 4 || argc > 6)
+    if(argc < 4 || argc > 7)
     {
         cout << "usage: <file_path> <height> <width> [kernel] [show] [mask_path]" << endl;
         return 0;
@@ -373,7 +377,9 @@ int main (int argc, char** argv) {
     char filename[100];
     int id = (int)time(0);
     sprintf(filename, "./result/result_%d_%s_energy.jpg", id, kernelName.c_str());
-//    cv::imwrite(filename, makeIMat(image));
+    cv::imshow("energy", makeIMat(image));
+    cv::imshow("image", image);
+    cv::waitKey();
 
     cerr << image.size[0] << 'x' << image.size[1] << endl;
     int size[] = {atoi(argv[2]), atoi(argv[3])};
