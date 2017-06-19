@@ -8,10 +8,13 @@ using std::cout;
 using std::endl;
 using std::cerr;
 using std::string;
+using std::vector;
 
 const int inf = 1 << 28;
 const uchar KEEP = 1;
 const uchar DELETE = 2;
+
+typedef vector<vector<int>> Seams;
 
 template <class T>
 inline bool updateMin (T& x, T const& a)
@@ -24,36 +27,90 @@ inline bool updateMin (T& x, T const& a)
     return false;
 }
 
-std::vector<int> findMinColSeam (cv::Mat1b imat, cv::Mat1b mask)
+template <class T>
+inline T mean (T const& a, T const& b)
 {
-    const int MAXN = 4000;
-    static int f[MAXN][MAXN];
-    static int from[MAXN][MAXN];
-    int m = imat.size[0], n = imat.size[1];
-    assert(m+1 < MAXN && n+1 < MAXN);
+    return a + (b - a) / 2;
+}
+
+const int MAXN = 4000;
+int f[MAXN][MAXN];
+
+void dp(cv::Mat1i const& imat) {
+    int m = imat.size[0];
+    int n = imat.size[1];
+    assert(m + 1 < MAXN && n + 1 < MAXN);
     for(int j=0; j<n; ++j)
         f[0][j] = imat.at<uchar>(0, j);
     for(int i=1; i<m; ++i)
         for(int j=0; j<n; ++j)
         {
             int &ff = f[i][j];
-            ff = inf;
-            for(int k = j-1; k <= j+1; ++k)
-                if(k >= 0 && k < n && updateMin(ff, f[i-1][k]))
-                    from[i][j] = k;
-            if(mask.at<uchar>(i, j) == KEEP)
-                ff += 512;
-            else if(mask.at<uchar>(i, j) == DELETE)
-                ff += -512;
-            else
-                ff += imat.at<uchar>(i, j);
+            const int* begin = &f[i-1][std::max(0, j - 1)];
+            const int* end   = &f[i-1][std::min(n, j + 2)];
+            ff = *std::min_element(begin, end);
+            ff += imat.at<int>(i, j);
         }
-    std::vector<int> cols((unsigned)m);
-    cols[m-1] = (int)(std::min_element(f[m-1], f[m-1] + n) - f[m-1]);
-    cerr << f[m-1][cols[m-1]] << endl;
-    for(int i=m-2; i>=0; --i)
-        cols[i] = from[i][cols[i+1]];
-    return cols;
+}
+
+Seams findMinColSeams (cv::Mat1i const& imat, size_t k)
+{
+    dp(imat);
+    int m = imat.size[0];
+    int n = imat.size[1];
+
+    Seams seams;
+    seams.reserve(k);
+    while(k--)
+    {
+        vector<int> cols((size_t)m);
+        cols[m-1] = (int)(std::min_element(f[m-1], f[m-1] + n) - f[m-1]);
+        if(f[m-1][cols[m-1]] == inf)
+            break;
+        bool accept = true;
+        for(int i=m-2; i>=0; --i) {
+            int j = cols[i + 1];
+            const int* begin = &f[i][std::max(0, j-1)];
+            const int* end   = &f[i][std::min(n, j+2)];
+            cols[i] = int(std::min_element(begin, end) - f[i]);
+            if(f[i][cols[i]] == inf)
+            {
+                accept = false;
+                break;
+            }
+        }
+        for(int i=0; i<m; ++i) {
+            int const& col = cols[i];
+            f[i][col] = inf;
+            if(accept)
+                f[i][col == 0? 1: col-1] = inf;
+        }
+        if(accept)
+            seams.push_back(cols);
+        else
+            k++;
+    }
+    return seams;
+}
+
+vector<int> findMinColSeam (cv::Mat1i const& imat)
+{
+    return findMinColSeams(imat, 1)[0];
+}
+
+cv::Mat1i applyMask (cv::Mat1b const& energy, cv::Mat1b const& mask)
+{
+    assert(energy.size == mask.size);
+    cv::Mat1i rst = cv::Mat::zeros(mask.size[0], mask.size[1], CV_32S);
+    rst.forEach([&](int& pixel, const int *pos){
+        if(mask.at<uchar>(pos) == KEEP)
+            pixel = 512;
+        else if(mask.at<uchar>(pos) == DELETE)
+            pixel = -512;
+        else
+            pixel = energy.at<uchar>(pos);
+    });
+    return rst;
 }
 
 string kernelName;
@@ -107,41 +164,66 @@ cv::Mat1b makeIMat (cv::Mat const& image)
     return rst;
 }
 
-cv::Mat cutCol (cv::Mat const& src, std::vector<int> const& cols)
+inline void matcpy (cv::Mat const& src, cv::Mat const& dst, int i, int j1, int j2, int n)
 {
-    assert(cols.size() == src.size[0]);
-    auto dst = cv::Mat(src.size[0], src.size[1] - 1, src.type());
-    for(int i=0; i < src.size[0]; ++i)
+    memcpy(dst.data + dst.step[0] * i + dst.step[1] * j2,
+           src.data + src.step[0] * i + src.step[1] * j1,
+           src.step[1] * n);
+}
+
+cv::Mat handleSeams (cv::Mat const& src, Seams const& seams, bool add = false)
+{
+    auto m = src.size[0];
+    auto n = src.size[1];
+    auto ns = seams.size();
+    auto n1 = add? n + ns: n - ns;
+
+    for(auto const& seam: seams)
+        assert(seam.size() == m);
+
+    auto dst = cv::Mat(m, (int) n1, src.type());
+
+    vector<int> ids(ns); // 按seam从右到左排序
+    for(int i=0; i<ns; ++i)
+        ids[i] = i;
+    std::sort(ids.begin(), ids.end(),
+                [&](int const& i, int const& j) -> bool
+                { return seams[i][0] < seams[j][0]; });
+
+    // 按seam从左到右将src拷贝到dst
+    auto zeros = vector<int>(m, 0);
+    auto vecns = vector<int>(m, n);
+    vector<int> const* lastSeam = &zeros;
+    for(int cnt=0; cnt<=ns; ++cnt)
     {
-        int col = cols[i];
-        memcpy(dst.data + dst.step[0] * i,
-               src.data + src.step[0] * i,
-               src.step[1] * col);
-        memcpy(dst.data + dst.step[0] * i + dst.step[1] * col,
-               src.data + src.step[0] * i + src.step[1] * (col + 1),
-               src.step[1] * (src.size[1] - col - 1));
+        auto nowSeam = cnt == ns? &vecns: &seams[ids[cnt]];
+        for(int i=0; i < m; ++i)
+        {
+            int col0 = (*lastSeam)[i];
+            int col1 = (*nowSeam)[i];
+            assert(col0 < col1 || (col0 == 0 && col1 == 0));
+            if(add) {
+                matcpy(src, dst, i, col0, col0 + cnt, col1 - col0);
+                typedef cv::Vec3b T;
+                if(col0 != 0)
+                    dst.at<T>(i, col0 + cnt-1) = mean(src.at<T>(i, col0), src.at<T>(i, col0 - 1));
+            }
+            else
+                matcpy(src, dst, i, col0, col0 - cnt, col1 - col0);
+        }
+        lastSeam = nowSeam;
     }
     return dst;
 }
 
-cv::Mat addCol (cv::Mat const& src, std::vector<int> const& cols)
+inline cv::Mat cutSeams (cv::Mat const& src, Seams const& seams)
 {
-    assert(cols.size() == src.size[0]);
-    auto dst = cv::Mat(src.size[0], src.size[1] + 1, src.type());
-    for(int i=0; i < src.size[0]; ++i)
-    {
-        int col = cols[i];
-        memcpy(dst.data + dst.step[0] * i,
-               src.data + src.step[0] * i,
-               src.step[1] * col);
-        memcpy(dst.data + dst.step[0] * i + dst.step[1] * (col + 1),
-               src.data + src.step[0] * i + src.step[1] * col,
-               src.step[1] * (src.size[1] - col));
-        memcpy(dst.data + dst.step[0] * i + dst.step[1] * col,
-               src.data + src.step[0] * i + src.step[1] * col,
-               src.step[1]);
-    }
-    return dst;
+    return handleSeams(src, seams, false);
+}
+
+inline cv::Mat addSeams (cv::Mat const& src, Seams const& seams)
+{
+    return handleSeams(src, seams, true);
 }
 
 inline cv::Mat transpose (cv::Mat const& src)
@@ -151,11 +233,15 @@ inline cv::Mat transpose (cv::Mat const& src)
     return dst;
 }
 
-void printSeam (cv::Mat src, std::vector<int> const& cols, cv::Mat mask, bool trans = false)
+void printSeams (cv::Mat src, Seams const& seams, cv::Mat const& mask, bool trans = false)
 {
     src = src.clone();
-    for(int i=0; i<cols.size(); ++i)
-        src.at<cv::Vec3b>(i, cols[i]) = cv::Vec3b(0, 0, 255);
+    auto dcolor = 200 / seams.size();
+    for(int k=0; k<seams.size(); ++k) {
+        auto const& cols = seams[k];
+        for (int i = 0; i < cols.size(); ++i)
+            src.at<cv::Vec3b>(i, cols[i]) = cv::Vec3b(0, 0, (uchar) (255 - k * dcolor));
+    }
     src.forEach<cv::Vec3b>([&](cv::Vec3b& pixel, const int *pos){
         if(mask.at<uchar>(pos) == KEEP)
             pixel = pixel * 0.5 + cv::Vec3b(0, 255, 0) * 0.5;
@@ -165,19 +251,37 @@ void printSeam (cv::Mat src, std::vector<int> const& cols, cv::Mat mask, bool tr
     if(trans)
         src = transpose(src);
     cv::imshow("image", src);
-    cv::waitKey(1);
+    cv::waitKey();
+}
+
+void printSeam (cv::Mat src, vector<int> const& cols, cv::Mat const& mask, bool trans = false)
+{
+    printSeams(src, Seams(1, cols), mask, trans);
 }
 
 bool show;
 
 cv::Mat seamCarvingCol (cv::Mat const& image, cv::Mat& mask, bool trans = false)
 {
-    auto imat = makeIMat(image);
-    auto cols = findMinColSeam(imat, mask);
+    auto imat0 = makeIMat(image);
+    auto imat = applyMask(imat0, mask);
+    auto seams = findMinColSeams(imat, 1);
     if(show)
-        printSeam(image, cols, mask, trans);
-    mask = cutCol(mask, cols);
-    return cutCol(image, cols);
+        printSeams(image, seams, mask, trans);
+    mask = cutSeams(mask, seams);
+    return cutSeams(image, seams);
+}
+
+cv::Mat seamCarvingEnlargeCol (cv::Mat const& image, size_t seamSize, bool trans = false)
+{
+    if(seamSize == 0)
+        return image;
+    auto imat = makeIMat(image);
+    auto seams = findMinColSeams(imat, seamSize);
+    auto mask = cv::Mat::zeros(image.size[0], image.size[1], CV_8U);
+    if(show)
+        printSeams(image, seams, mask, trans);
+    return addSeams(image, seams);
 }
 
 cv::Mat seamCarving (cv::Mat const& src, cv::MatSize size, cv::Mat const& mask0)
@@ -204,10 +308,27 @@ cv::Mat seamCarving (cv::Mat const& src, cv::MatSize size, cv::Mat const& mask0)
     else
     {
         image = transpose(image);
+        mask = transpose(mask);
         for(; rowTimes > 0; rowTimes--)
             image = seamCarvingCol(image, mask, true);
         image = transpose(image);
     }
+    return image;
+}
+
+cv::Mat seamCarvingEnlarge (cv::Mat const& src, cv::MatSize size)
+{
+    auto image = src.clone();
+    int colTimes = std::max(0, size[1] - src.size[1]);
+    int rowTimes = std::max(0, size[0] - src.size[0]);
+    int seamSize = colTimes / 8 + 1;
+    for(; colTimes > 0; colTimes -= seamSize)
+        image = seamCarvingEnlargeCol(image, (size_t) std::min(seamSize, colTimes), false);
+    seamSize = rowTimes / 8 + 1;
+    image = transpose(image);
+    for(; rowTimes > 0; rowTimes -= seamSize)
+        image = seamCarvingEnlargeCol(image, (size_t) std::min(seamSize, rowTimes), true);
+    image = transpose(image);
     return image;
 }
 
@@ -252,11 +373,14 @@ int main (int argc, char** argv) {
     char filename[100];
     int id = (int)time(0);
     sprintf(filename, "./result/result_%d_%s_energy.jpg", id, kernelName.c_str());
-    cv::imwrite(filename, makeIMat(image));
+//    cv::imwrite(filename, makeIMat(image));
 
     cerr << image.size[0] << 'x' << image.size[1] << endl;
     int size[] = {atoi(argv[2]), atoi(argv[3])};
-    image = seamCarving(image, cv::MatSize(size), mask);
+    if(size[0] >= image.size[0] && size[1] >= image.size[1])
+        image = seamCarvingEnlarge(image, cv::MatSize(size));
+    else
+        image = seamCarving(image, cv::MatSize(size), mask);
 
     sprintf(filename, "./result/result_%d_%s.jpg", id, kernelName.c_str());
     cv::imwrite(filename, image);
