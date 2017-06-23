@@ -10,7 +10,7 @@ using std::cerr;
 using std::string;
 using std::vector;
 
-const int inf = 1 << 28;
+const int inf = 1 << 20;
 const uchar KEEP = 1;
 const uchar DELETE = 2;
 
@@ -66,7 +66,10 @@ Seams findMinColSeams (cv::Mat1i const& imat0, size_t k)
         dp(imat);
         vector<int> cols((size_t)m);
         cols[m-1] = (int)(std::min_element(f[m-1], f[m-1] + n) - f[m-1]);
-        cerr << f[m-1][cols[m-1]] << endl;
+        auto fmin = f[m-1][cols[m-1]];
+        if(fmin >= inf)
+            break;
+        cerr << fmin << endl;
         for(int i=m-2; i>=0; --i) {
             int j = cols[i + 1];
             const int* begin = &f[i][std::max(0, j-1)];
@@ -259,10 +262,10 @@ cv::Mat seamCarvingCol (cv::Mat const& image, cv::Mat& mask, bool trans = false)
     auto seams = findMinColSeams(imat, 1);
     if(show) {
         printSeams(image, seams, mask, trans, "image");
-        cv::Mat mat0, mat1;
-        imat.convertTo(mat0, CV_8U);
-        cv::cvtColor(mat0, mat1, CV_GRAY2BGR);
-        printSeams(mat1, seams, mask, trans, "energy");
+//        cv::Mat mat0, mat1;
+//        imat.convertTo(mat0, CV_8U);
+//        cv::cvtColor(mat0, mat1, CV_GRAY2BGR);
+//        printSeams(mat1, seams, mask, trans, "energy");
 //        cv::Mat1i mat = imat.clone();
 //        mat.forEach([&](int& pixel, const int* pos){
 //            pixel = f[pos[0]][pos[1]];
@@ -376,7 +379,6 @@ int main (int argc, char** argv) {
     char filename[100];
     int id = (int)time(0);
     sprintf(filename, "../result/result_%d_%s_energy.jpg", id, kernelName.c_str());
-    cv::imshow("energy", makeIMat(image));
     cv::imshow("image", image);
     cv::waitKey();
 
