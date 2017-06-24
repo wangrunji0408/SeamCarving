@@ -92,17 +92,17 @@ vector<int> findMinColSeam (cv::Mat1i const& imat)
     return findMinColSeams(imat, 1)[0];
 }
 
-cv::Mat1i applyMask (cv::Mat1b const& energy, cv::Mat1b const& mask)
+cv::Mat1i applyMask (cv::Mat1i const& energy, cv::Mat1b const& mask)
 {
     assert(energy.size == mask.size);
     cv::Mat1i rst = cv::Mat::zeros(mask.size[0], mask.size[1], CV_32S);
     rst.forEach([&](int& pixel, const int *pos){
         if(mask.at<uchar>(pos) == KEEP)
-            pixel = 512;
+            pixel = inf;
         else if(mask.at<uchar>(pos) == DELETE)
-            pixel = -512;
+            pixel = -inf;
         else
-            pixel = energy.at<uchar>(pos);
+            pixel = energy.at<int>(pos);
     });
     return rst;
 }
@@ -227,7 +227,7 @@ inline cv::Mat transpose (cv::Mat const& src)
     return dst;
 }
 
-void printSeams (cv::Mat src, Seams const& seams, cv::Mat const& mask, bool trans, const char* name)
+cv::Mat printSeams (cv::Mat src, Seams const& seams, cv::Mat const& mask, bool trans)
 {
     src = src.clone();
     auto dcolor = 200 / seams.size();
@@ -244,13 +244,7 @@ void printSeams (cv::Mat src, Seams const& seams, cv::Mat const& mask, bool tran
     });
     if(trans)
         src = transpose(src);
-    cv::imshow(name, src);
-    cv::waitKey(1);
-}
-
-void printSeam (cv::Mat src, vector<int> const& cols, cv::Mat const& mask, bool trans)
-{
-    printSeams(src, Seams(1, cols), mask, trans, "image");
+    return src;
 }
 
 bool show;
@@ -261,18 +255,14 @@ cv::Mat seamCarvingCol (cv::Mat const& image, cv::Mat& mask, bool trans = false)
     auto imat = applyMask(imat0, mask);
     auto seams = findMinColSeams(imat, 1);
     if(show) {
-        printSeams(image, seams, mask, trans, "image");
+        auto show = printSeams(image, seams, mask, trans);
+        cv::imshow("image", show);
+        cv::waitKey(1);
 //        cv::Mat mat0, mat1;
 //        imat.convertTo(mat0, CV_8U);
 //        cv::cvtColor(mat0, mat1, CV_GRAY2BGR);
-//        printSeams(mat1, seams, mask, trans, "energy");
-//        cv::Mat1i mat = imat.clone();
-//        mat.forEach([&](int& pixel, const int* pos){
-//            pixel = f[pos[0]][pos[1]];
-//        });
-//        mat.convertTo(mat0, CV_8U);
-//        cv::cvtColor(mat0, mat1, CV_GRAY2BGR);
-//        printSeams(mat1, seams, mask, trans, "f");
+//        show = printSeams(mat1, seams, mask, trans);
+//        cv::imshow("energy", show);
     }
     mask = cutSeams(mask, seams);
     return cutSeams(image, seams);
@@ -285,8 +275,11 @@ cv::Mat seamCarvingEnlargeCol (cv::Mat const& image, size_t seamSize, bool trans
     auto imat = makeIMat(image);
     auto seams = findMinColSeams(imat, seamSize);
     auto mask = cv::Mat::zeros(image.size[0], image.size[1], CV_8U);
-    if(show)
-        printSeams(image, seams, mask, trans, "image");
+    if(show) {
+        auto show = printSeams(image, seams, mask, trans);
+        cv::imshow("image", show);
+        cv::waitKey(1);
+    }
     return addSeams(image, seams);
 }
 
@@ -353,6 +346,19 @@ cv::Mat readMask (const char* path)
     return rst;
 }
 
+cv::Mat3b printSeams (cv::Mat3b const& image, cv::Mat1b mask, size_t row, size_t col)
+{
+    auto imat0 = makeIMat(image);
+    auto imat = applyMask(imat0, mask);
+    auto seams = findMinColSeams(imat, col);
+    auto show = printSeams(image, seams, mask, false);
+    imat = transpose(imat);
+    seams = findMinColSeams(imat, row);
+    mask = cv::Mat::zeros(image.size[0], image.size[1], CV_8U);
+    show = printSeams(transpose(show), seams, mask, true);
+    return show;
+}
+
 //DEFINE_string(filePath, true, "File path");
 //DEFINE_uint32(height, true, "Image height");
 //DEFINE_uint32(width, true, "Image width");
@@ -366,9 +372,14 @@ int main (int argc, char** argv) {
     if(argc < 4 || argc > 7)
     {
         cout << "usage: <file_path> <height> <width> [kernel] [show] [mask_path]" << endl;
+        cout << "       kernel: simple, sobel, laplace" << endl;
+        cout << "       show:   0, 1" << endl;
         return 0;
     }
 
+    char filename[100];
+    const char* outputPath = "../result/";
+    int id = (int)time(0);
     char* filePath = argv[1];
     auto image = cv::imread(filePath);
     kernelName = argc >= 5? argv[4]: "simple";
@@ -376,9 +387,14 @@ int main (int argc, char** argv) {
     auto mask = argc >= 7? readMask(argv[6]): cv::Mat::zeros(image.size[0], image.size[1], CV_8U);
     assert(image.size == mask.size);
 
-    char filename[100];
-    int id = (int)time(0);
-    sprintf(filename, "../result/result_%d_%s_energy.jpg", id, kernelName.c_str());
+//    auto imageWithSeams = printSeams(image, mask, 10, 10);
+//    sprintf(filename, "%sresult_%d_%s_seams.jpg", outputPath, id, kernelName.c_str());
+//    cv::imwrite(filename, imageWithSeams);
+
+    sprintf(filename, "%sresult_%d_%s_energy.jpg", outputPath, id, kernelName.c_str());
+    auto energy = cv::Mat1b(applyMask(makeIMat(image), mask));
+    cv::imwrite(filename, energy);
+    cv::imshow("energy", energy);
     cv::imshow("image", image);
     cv::waitKey();
 
@@ -389,7 +405,7 @@ int main (int argc, char** argv) {
     else
         image = seamCarving(image, cv::MatSize(size), mask);
 
-    sprintf(filename, "../result/result_%d_%s.jpg", id, kernelName.c_str());
+    sprintf(filename, "%sresult_%d_%s.jpg", outputPath, id, kernelName.c_str());
     cv::imwrite(filename, image);
     cv::imshow("image", image);
     cv::waitKey();
